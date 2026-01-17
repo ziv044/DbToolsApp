@@ -1,7 +1,7 @@
 """SQL Server deployment scripts for monitoring objects."""
 
 # Current deployment version
-DEPLOYMENT_VERSION = "1.0.0"
+DEPLOYMENT_VERSION = "1.1.0"
 
 # Schema creation script
 CREATE_SCHEMA = """
@@ -149,6 +149,129 @@ BEGIN
 END
 """
 
+# Stored procedure to collect connection metrics
+CREATE_SP_COLLECT_CONNECTIONS = """
+CREATE OR ALTER PROCEDURE DbTools.CollectConnectionMetrics
+AS
+BEGIN
+    SET NOCOUNT ON
+
+    SELECT
+        COUNT(*) AS TotalConnections,
+        SUM(CASE WHEN is_user_process = 1 THEN 1 ELSE 0 END) AS UserConnections,
+        SUM(CASE WHEN is_user_process = 0 THEN 1 ELSE 0 END) AS SystemConnections,
+        MAX(login_time) AS LastLoginTime
+    FROM sys.dm_exec_sessions
+END
+"""
+
+# Stored procedure to collect performance counters
+CREATE_SP_COLLECT_PERF_COUNTERS = """
+CREATE OR ALTER PROCEDURE DbTools.CollectPerfCounters
+AS
+BEGIN
+    SET NOCOUNT ON
+
+    SELECT
+        object_name AS ObjectName,
+        counter_name AS CounterName,
+        instance_name AS InstanceName,
+        cntr_value AS CounterValue,
+        cntr_type AS CounterType
+    FROM sys.dm_os_performance_counters
+    WHERE counter_name IN (
+        'Batch Requests/sec',
+        'SQL Compilations/sec',
+        'SQL Re-Compilations/sec',
+        'User Connections',
+        'Page life expectancy',
+        'Buffer cache hit ratio',
+        'Transactions/sec',
+        'Lock Waits/sec',
+        'Full Scans/sec',
+        'Index Searches/sec'
+    )
+END
+"""
+
+# Stored procedure to collect disk I/O metrics
+CREATE_SP_COLLECT_DISK_IO = """
+CREATE OR ALTER PROCEDURE DbTools.CollectDiskIO
+AS
+BEGIN
+    SET NOCOUNT ON
+
+    SELECT
+        DB_NAME(database_id) AS DatabaseName,
+        file_id AS FileId,
+        num_of_reads AS NumReads,
+        num_of_writes AS NumWrites,
+        num_of_bytes_read AS BytesRead,
+        num_of_bytes_written AS BytesWritten,
+        io_stall_read_ms AS ReadStallMs,
+        io_stall_write_ms AS WriteStallMs,
+        size_on_disk_bytes AS SizeOnDiskBytes
+    FROM sys.dm_io_virtual_file_stats(NULL, NULL)
+    WHERE database_id > 4 -- Skip system databases
+END
+"""
+
+# Stored procedure to collect all metrics at once
+CREATE_SP_COLLECT_ALL_METRICS = """
+CREATE OR ALTER PROCEDURE DbTools.CollectAllMetrics
+AS
+BEGIN
+    SET NOCOUNT ON
+
+    -- CPU metrics
+    DECLARE @SqlCpu INT, @SystemIdle INT
+    SELECT TOP 1
+        @SqlCpu = record.value('(./Record/SchedulerMonitorEvent/SystemHealth/ProcessUtilization)[1]', 'int'),
+        @SystemIdle = record.value('(./Record/SchedulerMonitorEvent/SystemHealth/SystemIdle)[1]', 'int')
+    FROM (
+        SELECT CAST(record AS XML) AS record
+        FROM sys.dm_os_ring_buffers
+        WHERE ring_buffer_type = N'RING_BUFFER_SCHEDULER_MONITOR'
+        AND record LIKE '%<SystemHealth>%'
+    ) AS t
+
+    -- Memory metrics
+    DECLARE @TotalMemoryMB BIGINT, @AvailableMemoryMB BIGINT, @MemoryPercent DECIMAL(5,2)
+    SELECT
+        @TotalMemoryMB = physical_memory_kb / 1024,
+        @AvailableMemoryMB = available_physical_memory_kb / 1024,
+        @MemoryPercent = (physical_memory_kb - available_physical_memory_kb) * 100.0 / physical_memory_kb
+    FROM sys.dm_os_sys_memory
+
+    -- Connection count
+    DECLARE @ConnectionCount INT
+    SELECT @ConnectionCount = COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1
+
+    -- Performance counters
+    DECLARE @BatchRequestsSec BIGINT, @PageLifeExpectancy INT
+    SELECT @BatchRequestsSec = cntr_value FROM sys.dm_os_performance_counters WHERE counter_name = 'Batch Requests/sec'
+    SELECT @PageLifeExpectancy = cntr_value FROM sys.dm_os_performance_counters WHERE counter_name = 'Page life expectancy' AND object_name LIKE '%Buffer Manager%'
+
+    -- Blocked processes
+    DECLARE @BlockedProcesses INT
+    SELECT @BlockedProcesses = COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id > 0
+
+    -- Return all metrics
+    SELECT
+        @SqlCpu AS SqlCpuPercent,
+        @SystemIdle AS SystemIdlePercent,
+        100 - ISNULL(@SystemIdle, 0) - ISNULL(@SqlCpu, 0) AS OtherCpuPercent,
+        @TotalMemoryMB AS TotalMemoryMB,
+        @AvailableMemoryMB AS AvailableMemoryMB,
+        @MemoryPercent AS MemoryUsedPercent,
+        @ConnectionCount AS ConnectionCount,
+        @BatchRequestsSec AS BatchRequestsSec,
+        @PageLifeExpectancy AS PageLifeExpectancy,
+        @BlockedProcesses AS BlockedProcesses,
+        GETUTCDATE() AS CollectedAtUtc
+END
+"""
+
 # Stored procedure to get deployment status
 CREATE_SP_GET_DEPLOYMENT_STATUS = """
 CREATE OR ALTER PROCEDURE DbTools.GetDeploymentStatus
@@ -174,6 +297,10 @@ DEPLOYMENT_SCRIPTS = [
     ('Create CollectMemoryMetrics SP', CREATE_SP_COLLECT_MEMORY),
     ('Create CollectWaitStats SP', CREATE_SP_COLLECT_WAITS),
     ('Create CollectDatabaseInfo SP', CREATE_SP_COLLECT_DATABASES),
+    ('Create CollectConnectionMetrics SP', CREATE_SP_COLLECT_CONNECTIONS),
+    ('Create CollectPerfCounters SP', CREATE_SP_COLLECT_PERF_COUNTERS),
+    ('Create CollectDiskIO SP', CREATE_SP_COLLECT_DISK_IO),
+    ('Create CollectAllMetrics SP', CREATE_SP_COLLECT_ALL_METRICS),
     ('Create GetDeploymentStatus SP', CREATE_SP_GET_DEPLOYMENT_STATUS),
 ]
 

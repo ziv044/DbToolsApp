@@ -18,6 +18,8 @@ from app.services.collection_config_service import (
     CollectionConfigError,
     CollectionConfigValidationError,
 )
+from app.services.health_service import HealthService
+from app.services.metrics_service import MetricsService, MetricsServiceError
 
 
 @api.route('/servers', methods=['GET'])
@@ -500,3 +502,175 @@ def stop_collection(server_id: str):
                 'message': e.message
             }
         }), 404 if e.code == 'SERVER_NOT_FOUND' else 400
+
+
+@api.route('/servers/health', methods=['GET'])
+@require_tenant
+def get_all_servers_health():
+    """Get health status for all servers."""
+    service = HealthService(g.tenant_session)
+    health_data = service.get_all_servers_health()
+
+    return jsonify({
+        'servers': health_data,
+        'total': len(health_data)
+    }), 200
+
+
+@api.route('/servers/<server_id>/health', methods=['GET'])
+@require_tenant
+def get_server_health(server_id: str):
+    """Get health status for a single server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    service = HealthService(g.tenant_session)
+    health_data = service.get_server_health(uuid_id)
+
+    if not health_data:
+        return jsonify({
+            'error': {
+                'code': 'NOT_FOUND',
+                'message': f'Server with id {server_id} not found'
+            }
+        }), 404
+
+    return jsonify(health_data), 200
+
+
+@api.route('/settings/health-thresholds', methods=['GET'])
+@require_tenant
+def get_health_thresholds():
+    """Get current health thresholds."""
+    service = HealthService(g.tenant_session)
+    thresholds = service.get_thresholds()
+
+    return jsonify({'thresholds': thresholds}), 200
+
+
+@api.route('/settings/health-thresholds', methods=['PUT'])
+@require_tenant
+def update_health_thresholds():
+    """Update health thresholds."""
+    data = request.get_json() or {}
+
+    try:
+        service = HealthService(g.tenant_session)
+        thresholds = service.update_thresholds(
+            cpu_warning=data.get('cpu_warning'),
+            cpu_critical=data.get('cpu_critical'),
+            memory_warning=data.get('memory_warning'),
+            memory_critical=data.get('memory_critical'),
+            offline_seconds=data.get('offline_seconds'),
+        )
+
+        return jsonify({'thresholds': thresholds}), 200
+
+    except ValueError as e:
+        return jsonify({
+            'error': {
+                'code': 'VALIDATION_ERROR',
+                'message': str(e)
+            }
+        }), 400
+
+
+@api.route('/servers/<server_id>/metrics', methods=['GET'])
+@require_tenant
+def get_server_metrics(server_id: str):
+    """
+    Get time series metrics for a server.
+
+    Query params:
+        range: Time range (1h, 6h, 24h, 7d, 30d) - default: 24h
+        metric: Specific metric (cpu, memory, connections, batch_requests) - default: all
+
+    Returns:
+        200: Metrics time series data
+        404: Server not found
+    """
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    time_range = request.args.get('range', '24h')
+    metric = request.args.get('metric')
+
+    # Validate time range
+    valid_ranges = ['1h', '6h', '24h', '7d', '30d']
+    if time_range not in valid_ranges:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_RANGE',
+                'message': f'Invalid time range. Must be one of: {", ".join(valid_ranges)}'
+            }
+        }), 400
+
+    # Validate metric if provided
+    valid_metrics = ['cpu', 'memory', 'connections', 'batch_requests']
+    if metric and metric not in valid_metrics:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_METRIC',
+                'message': f'Invalid metric. Must be one of: {", ".join(valid_metrics)}'
+            }
+        }), 400
+
+    try:
+        service = MetricsService(g.tenant_session)
+        data = service.get_metrics(uuid_id, time_range, metric)
+
+        return jsonify(data), 200
+
+    except MetricsServiceError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message
+            }
+        }), 404 if e.code == 'NOT_FOUND' else 400
+
+
+@api.route('/servers/<server_id>/metrics/latest', methods=['GET'])
+@require_tenant
+def get_server_latest_snapshot(server_id: str):
+    """Get the latest snapshot for a server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    try:
+        service = MetricsService(g.tenant_session)
+        snapshot = service.get_latest_snapshot(uuid_id)
+
+        if not snapshot:
+            return jsonify({'snapshot': None}), 200
+
+        return jsonify({'snapshot': snapshot}), 200
+
+    except MetricsServiceError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message
+            }
+        }), 404 if e.code == 'NOT_FOUND' else 400

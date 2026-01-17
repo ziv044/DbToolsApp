@@ -1,14 +1,32 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Server, RefreshCw } from 'lucide-react'
 import { Card, CardHeader, CardContent, Button, Spinner } from '../components/ui'
 import { AddServerModal, ServerList } from '../components/servers'
 import { serverService } from '../services/serverService'
+import type { Server as ServerType } from '../services/serverService'
+import { healthService } from '../services/healthService'
 import { toast } from '../components/ui/toastStore'
 
 export const Servers = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [isTabVisible, setIsTabVisible] = useState(!document.hidden)
   const queryClient = useQueryClient()
+
+  // Handle visibility change - pause polling when tab is hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = !document.hidden
+      setIsTabVisible(visible)
+      if (visible) {
+        queryClient.invalidateQueries({ queryKey: ['servers'] })
+        queryClient.invalidateQueries({ queryKey: ['servers-health'] })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [queryClient])
 
   const { data, isLoading, refetch, isFetching } = useQuery({
     queryKey: ['servers'],
@@ -16,7 +34,33 @@ export const Servers = () => {
     staleTime: 30_000,
   })
 
-  const servers = data?.servers ?? []
+  // Also fetch health data for real-time status
+  const { data: healthData } = useQuery({
+    queryKey: ['servers-health'],
+    queryFn: healthService.getAllHealth,
+    refetchInterval: isTabVisible ? 30_000 : false,
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+  })
+
+  // Merge server data with health status
+  const servers: ServerType[] = useMemo(() => {
+    const baseServers = data?.servers ?? []
+    if (!healthData?.servers) return baseServers
+
+    const healthMap = new Map(healthData.servers.map((h) => [h.server_id, h]))
+
+    return baseServers.map((server) => {
+      const health = healthMap.get(server.id)
+      if (health) {
+        return {
+          ...server,
+          status: health.status as ServerType['status'],
+        }
+      }
+      return server
+    })
+  }, [data?.servers, healthData?.servers])
 
   const handleBulkAction = async (ids: string[], action: string) => {
     if (action === 'delete') {
@@ -37,7 +81,14 @@ export const Servers = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Servers</h1>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => refetch()} disabled={isFetching}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              refetch()
+              queryClient.invalidateQueries({ queryKey: ['servers-health'] })
+            }}
+            disabled={isFetching}
+          >
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
             Refresh
           </Button>

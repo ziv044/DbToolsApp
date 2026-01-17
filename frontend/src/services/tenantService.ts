@@ -30,8 +30,9 @@ export interface UpdateTenantInput {
 
 export const tenantService = {
   getAll: async (): Promise<TenantsResponse> => {
-    const { data } = await axios.get<TenantsResponse>(`${API_BASE_URL}/tenants`)
-    return data
+    const { data } = await axios.get<Tenant[]>(`${API_BASE_URL}/tenants`)
+    // API returns array directly, wrap it in expected format
+    return { tenants: data, total: data.length }
   },
 
   getBySlug: async (slug: string): Promise<Tenant> => {
