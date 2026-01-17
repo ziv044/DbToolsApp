@@ -18,6 +18,7 @@ import {
   Bell,
   PlayCircle,
   AlertCircle,
+  Database,
 } from 'lucide-react'
 import { Card, CardHeader, CardContent, Button, Spinner, Badge } from '../components/ui'
 import { ConfirmDialog } from '../components/ui/Modal'
@@ -207,6 +208,10 @@ export const ServerDetail = () => {
           <Button variant="secondary" onClick={handleTestConnection} disabled={isTesting}>
             {isTesting ? <Spinner size="sm" /> : <Plug className="h-4 w-4 mr-2" />}
             Test Connection
+          </Button>
+          <Button variant="secondary" onClick={() => navigate(`/servers/${server.id}/query-config`)}>
+            <Database className="h-4 w-4 mr-2" />
+            Query Collection
           </Button>
           <Button variant="secondary" onClick={() => navigate(`/servers/${server.id}/edit`)}>
             <Pencil className="h-4 w-4 mr-2" />

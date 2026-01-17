@@ -248,6 +248,64 @@ class ServerSnapshot(TenantBase):
         }
 
 
+class RunningQuerySnapshot(TenantBase):
+    """Snapshot of a running query captured from SQL Server."""
+    __tablename__ = 'running_query_snapshots'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    collected_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    # Query identification
+    session_id = Column(Integer, nullable=False)
+    request_id = Column(Integer, nullable=True)
+    database_name = Column(String(128), nullable=True)
+
+    # Query text (the main payload)
+    query_text = Column(Text, nullable=True)
+
+    # Timing
+    start_time = Column(DateTime(timezone=True), nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+
+    # Status & waits
+    status = Column(String(30), nullable=True)
+    wait_type = Column(String(60), nullable=True)
+    wait_time_ms = Column(Integer, nullable=True)
+
+    # Resource usage
+    cpu_time_ms = Column(Integer, nullable=True)
+    logical_reads = Column(Integer, nullable=True)
+    physical_reads = Column(Integer, nullable=True)
+    writes = Column(Integer, nullable=True)
+
+    # Composite index for efficient time-range queries
+    __table_args__ = (
+        Index('ix_running_queries_server_time', 'server_id', 'collected_at'),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert running query snapshot to dictionary representation."""
+        return {
+            'id': str(self.id),
+            'server_id': str(self.server_id),
+            'collected_at': self.collected_at.isoformat() if self.collected_at else None,
+            'session_id': self.session_id,
+            'request_id': self.request_id,
+            'database_name': self.database_name,
+            'query_text': self.query_text,
+            'start_time': self.start_time.isoformat() if self.start_time else None,
+            'duration_ms': self.duration_ms,
+            'status': self.status,
+            'wait_type': self.wait_type,
+            'wait_time_ms': self.wait_time_ms,
+            'cpu_time_ms': self.cpu_time_ms,
+            'logical_reads': self.logical_reads,
+            'physical_reads': self.physical_reads,
+            'writes': self.writes,
+        }
+
+
 class Metric(TenantBase):
     """Individual metric data point (for detailed historical data)."""
     __tablename__ = 'metrics'
@@ -314,11 +372,30 @@ class CollectionConfig(TenantBase):
     created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
+    # Query collection settings
+    query_collection_enabled = Column(Boolean, nullable=False, default=False)
+    query_collection_interval = Column(Integer, nullable=False, default=30)
+    query_min_duration_ms = Column(Integer, nullable=False, default=0)
+    last_query_collected_at = Column(DateTime(timezone=True), nullable=True)
+
+    # Query collection filters (SQL LIKE patterns with % and _ wildcards)
+    query_filter_database = Column(String(128), nullable=True)
+    query_filter_login = Column(String(128), nullable=True)
+    query_filter_user = Column(String(128), nullable=True)
+    query_filter_text_include = Column(Text, nullable=True)
+    query_filter_text_exclude = Column(Text, nullable=True)
+
     # Validation constants
     MIN_INTERVAL = 30
     MAX_INTERVAL = 3600
     DEFAULT_INTERVAL = 60
     DEFAULT_METRICS = ['cpu_percent', 'memory_percent', 'connection_count']
+
+    # Query collection validation constants
+    MIN_QUERY_INTERVAL = 10
+    MAX_QUERY_INTERVAL = 300
+    DEFAULT_QUERY_INTERVAL = 30
+    MAX_QUERY_MIN_DURATION_MS = 60000
 
     def to_dict(self) -> dict:
         """Convert config to dictionary representation."""
@@ -330,6 +407,17 @@ class CollectionConfig(TenantBase):
             'last_collected_at': self.last_collected_at.isoformat() if self.last_collected_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            # Query collection fields
+            'query_collection_enabled': self.query_collection_enabled,
+            'query_collection_interval': self.query_collection_interval,
+            'query_min_duration_ms': self.query_min_duration_ms,
+            'last_query_collected_at': self.last_query_collected_at.isoformat() if self.last_query_collected_at else None,
+            # Query collection filters
+            'query_filter_database': self.query_filter_database,
+            'query_filter_login': self.query_filter_login,
+            'query_filter_user': self.query_filter_user,
+            'query_filter_text_include': self.query_filter_text_include,
+            'query_filter_text_exclude': self.query_filter_text_exclude,
         }
 
 

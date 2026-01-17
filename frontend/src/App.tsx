@@ -1,6 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MainLayout } from './components/layout'
-import { Dashboard, Servers, ServerDetail, Groups, GroupDetail, Policies, PolicyDetail, Jobs, JobDetail, Alerts, AlertRules, Activity, Settings } from './pages'
+import { Dashboard, Servers, ServerDetail, RunningQueries, QueryCollectionConfig, Groups, GroupDetail, Policies, PolicyDetail, Jobs, JobDetail, Alerts, AlertRules, Activity, Settings } from './pages'
 import { AdminTenants } from './pages/admin'
 
 function App() {
@@ -12,6 +12,8 @@ function App() {
           <Route path="dashboard" element={<Dashboard />} />
           <Route path="servers" element={<Servers />} />
           <Route path="servers/:id" element={<ServerDetail />} />
+          <Route path="servers/:id/query-config" element={<QueryCollectionConfig />} />
+          <Route path="running-queries" element={<RunningQueries />} />
           <Route path="groups" element={<Groups />} />
           <Route path="groups/:id" element={<GroupDetail />} />
           <Route path="policies" element={<Policies />} />

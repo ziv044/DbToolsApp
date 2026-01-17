@@ -20,6 +20,7 @@ from app.services.collection_config_service import (
 )
 from app.services.health_service import HealthService
 from app.services.metrics_service import MetricsService, MetricsServiceError
+from app.services.running_queries_service import RunningQueriesService
 
 
 @api.route('/servers', methods=['GET'])
@@ -674,3 +675,249 @@ def get_server_latest_snapshot(server_id: str):
                 'message': e.message
             }
         }), 404 if e.code == 'NOT_FOUND' else 400
+
+
+# Query Collection Endpoints
+
+@api.route('/servers/<server_id>/query-collection/start', methods=['POST'])
+@require_tenant
+def start_query_collection(server_id: str):
+    """Start query collection for a server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    try:
+        service = CollectionConfigService(g.tenant_session)
+        config = service.start_query_collection(uuid_id)
+
+        return jsonify({
+            'success': True,
+            'config': config.to_dict()
+        }), 200
+
+    except CollectionConfigError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message
+            }
+        }), 404 if e.code == 'SERVER_NOT_FOUND' else 400
+
+
+@api.route('/servers/<server_id>/query-collection/stop', methods=['POST'])
+@require_tenant
+def stop_query_collection(server_id: str):
+    """Stop query collection for a server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    try:
+        service = CollectionConfigService(g.tenant_session)
+        config = service.stop_query_collection(uuid_id)
+
+        return jsonify({
+            'success': True,
+            'config': config.to_dict()
+        }), 200
+
+    except CollectionConfigError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message
+            }
+        }), 404 if e.code == 'SERVER_NOT_FOUND' else 400
+
+
+@api.route('/servers/<server_id>/query-collection/config', methods=['PUT'])
+@require_tenant
+def update_query_collection_config(server_id: str):
+    """Update query collection config for a server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    data = request.get_json() or {}
+
+    try:
+        service = CollectionConfigService(g.tenant_session)
+        config = service.update_query_config(
+            server_id=uuid_id,
+            query_collection_interval=data.get('query_collection_interval'),
+            query_min_duration_ms=data.get('query_min_duration_ms'),
+            query_filter_database=data.get('query_filter_database'),
+            query_filter_login=data.get('query_filter_login'),
+            query_filter_user=data.get('query_filter_user'),
+            query_filter_text_include=data.get('query_filter_text_include'),
+            query_filter_text_exclude=data.get('query_filter_text_exclude'),
+        )
+
+        return jsonify(config.to_dict()), 200
+
+    except CollectionConfigValidationError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message,
+                'field': e.field
+            }
+        }), 400
+    except CollectionConfigError as e:
+        return jsonify({
+            'error': {
+                'code': e.code,
+                'message': e.message
+            }
+        }), 404 if e.code == 'SERVER_NOT_FOUND' else 400
+
+
+@api.route('/servers/<server_id>/running-queries', methods=['GET'])
+@require_tenant
+def get_running_queries(server_id: str):
+    """
+    Get running queries history for a server.
+
+    Query params:
+        range: Time range (1h, 6h, 24h, 7d, 30d) - default: 1h
+        limit: Maximum number of records - default: 100
+
+    Returns:
+        200: Running queries data
+        404: Server not found
+    """
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    time_range = request.args.get('range', '1h')
+    limit = request.args.get('limit', 100, type=int)
+
+    # Validate time range
+    valid_ranges = ['1h', '6h', '24h', '7d', '30d']
+    if time_range not in valid_ranges:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_RANGE',
+                'message': f'Invalid time range. Must be one of: {", ".join(valid_ranges)}'
+            }
+        }), 400
+
+    # Validate limit
+    if limit < 1 or limit > 1000:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_LIMIT',
+                'message': 'Limit must be between 1 and 1000'
+            }
+        }), 400
+
+    service = RunningQueriesService(g.tenant_session)
+    data = service.get_running_queries(uuid_id, time_range, limit)
+
+    return jsonify(data), 200
+
+
+@api.route('/servers/<server_id>/running-queries/latest', methods=['GET'])
+@require_tenant
+def get_latest_running_queries(server_id: str):
+    """Get the most recent running queries snapshot for a server."""
+    try:
+        uuid_id = UUID(server_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid server ID format'
+            }
+        }), 400
+
+    service = RunningQueriesService(g.tenant_session)
+    data = service.get_latest_queries(uuid_id)
+
+    return jsonify(data), 200
+
+
+@api.route('/running-queries', methods=['GET'])
+@require_tenant
+def get_all_running_queries():
+    """
+    Get running queries across all servers.
+
+    Query params:
+        server_id: Optional server UUID to filter by specific server
+        range: Time range (1h, 6h, 24h, 7d, 30d) - default: 1h
+        limit: Maximum number of records - default: 500
+
+    Returns:
+        200: Running queries data with server info
+    """
+    server_id = request.args.get('server_id')
+    time_range = request.args.get('range', '1h')
+    limit = request.args.get('limit', 500, type=int)
+
+    # Validate time range
+    valid_ranges = ['1h', '6h', '24h', '7d', '30d']
+    if time_range not in valid_ranges:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_RANGE',
+                'message': f'Invalid time range. Must be one of: {", ".join(valid_ranges)}'
+            }
+        }), 400
+
+    # Validate limit
+    if limit < 1 or limit > 1000:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_LIMIT',
+                'message': 'Limit must be between 1 and 1000'
+            }
+        }), 400
+
+    # Parse server_id if provided
+    uuid_server_id = None
+    if server_id:
+        try:
+            uuid_server_id = UUID(server_id)
+        except ValueError:
+            return jsonify({
+                'error': {
+                    'code': 'INVALID_ID',
+                    'message': 'Invalid server ID format'
+                }
+            }), 400
+
+    service = RunningQueriesService(g.tenant_session)
+    data = service.get_all_running_queries(
+        server_id=uuid_server_id,
+        time_range=time_range,
+        limit=limit
+    )
+
+    return jsonify(data), 200

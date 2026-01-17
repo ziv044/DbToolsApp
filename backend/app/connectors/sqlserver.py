@@ -139,16 +139,25 @@ class SQLServerConnector:
     # Connection timeout in seconds
     CONNECTION_TIMEOUT = 10
 
-    def __init__(self):
+    # Default ODBC driver
+    DEFAULT_DRIVER = 'ODBC Driver 18 for SQL Server'
+
+    def __init__(self, driver: str = None):
         if not PYODBC_AVAILABLE:
             raise SQLServerConnectionError("pyodbc is not installed")
+        # Store driver at init time to avoid needing Flask app context later
+        if driver:
+            self._driver = driver
+        else:
+            try:
+                self._driver = current_app.config.get('SQLSERVER_DRIVER', self.DEFAULT_DRIVER)
+            except RuntimeError:
+                # Not in Flask app context, use default
+                self._driver = self.DEFAULT_DRIVER
 
     def _get_driver(self) -> str:
-        """Get the ODBC driver name from config or default."""
-        return current_app.config.get(
-            'SQLSERVER_DRIVER',
-            'ODBC Driver 18 for SQL Server'
-        )
+        """Get the ODBC driver name."""
+        return self._driver
 
     def _build_connection_string(
         self,

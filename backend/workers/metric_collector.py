@@ -9,7 +9,7 @@ from typing import Optional
 from app import create_app
 from app.extensions import db
 from app.models.system import Tenant
-from app.models.tenant import Server, ServerSnapshot, CollectionConfig
+from app.models.tenant import Server, ServerSnapshot, CollectionConfig, RunningQuerySnapshot
 from app.core.tenant_manager import tenant_manager
 from app.core.encryption import decrypt_password, EncryptionError
 from app.connectors import SQLServerConnector
@@ -185,78 +185,93 @@ class MetricCollector:
             logger.warning("SQL Server connector not available")
             return
 
-        session = None
-        try:
-            session = tenant_manager.get_session(tenant_slug)
+        # Push Flask app context for this thread (needed for tenant_manager)
+        with self.app.app_context():
+            session = None
+            try:
+                session = tenant_manager.get_session(tenant_slug)
 
-            # Decrypt password
-            password = None
-            if server.encrypted_password:
-                try:
-                    password = decrypt_password(server.encrypted_password)
-                except EncryptionError as e:
-                    logger.error(f"Failed to decrypt password for {server.name}: {e}")
-                    self._update_server_status(session, server, 'error')
+                # Re-query server and config in this session to ensure they're tracked
+                server = session.query(Server).filter_by(id=server.id).first()
+                config = session.query(CollectionConfig).filter_by(server_id=server.id).first()
+                if not server or not config:
+                    logger.warning(f"Server or config not found for {tenant_slug}")
                     return
 
-            # Connect and collect metrics
-            try:
-                conn = self.connector.connect(
-                    hostname=server.hostname,
-                    port=server.port,
-                    instance_name=server.instance_name,
-                    auth_type=server.auth_type,
-                    username=server.username,
-                    password=password,
-                    database='master'
-                )
-            except Exception as e:
-                logger.warning(f"Connection failed for {server.name}: {e}")
-                self._update_server_status(session, server, 'offline')
-                return
+                # Decrypt password
+                password = None
+                if server.encrypted_password:
+                    try:
+                        password = decrypt_password(server.encrypted_password)
+                    except EncryptionError as e:
+                        logger.error(f"Failed to decrypt password for {server.name}: {e}")
+                        self._update_server_status(session, server, 'error')
+                        return
 
-            try:
-                cursor = conn.cursor()
-                metrics = self._collect_metrics(cursor)
-                conn.close()
-
-                # Create snapshot
-                snapshot = ServerSnapshot(
-                    server_id=server.id,
-                    collected_at=datetime.now(timezone.utc),
-                    cpu_percent=metrics.get('cpu_percent'),
-                    memory_percent=metrics.get('memory_percent'),
-                    connection_count=metrics.get('connection_count'),
-                    batch_requests_sec=metrics.get('batch_requests_sec'),
-                    page_life_expectancy=metrics.get('page_life_expectancy'),
-                    blocked_processes=metrics.get('blocked_processes'),
-                    extended_metrics=metrics.get('extended_metrics'),
-                    status='online'
-                )
-                session.add(snapshot)
-
-                # Update config last_collected_at
-                config.last_collected_at = datetime.now(timezone.utc)
-
-                # Update server status
-                self._update_server_status(session, server, 'online')
-
-                session.commit()
-                logger.debug(f"Collected metrics from {server.name}")
-
-            except Exception as e:
-                logger.exception(f"Error collecting metrics from {server.name}: {e}")
-                conn.close()
-                self._update_server_status(session, server, 'error')
-
-        except Exception as e:
-            logger.exception(f"Error in collect_server for {server.name}: {e}")
-        finally:
-            if session:
+                # Connect and collect metrics
                 try:
-                    session.remove()
-                except Exception:
-                    pass
+                    conn = self.connector.connect(
+                        hostname=server.hostname,
+                        port=server.port,
+                        instance_name=server.instance_name,
+                        auth_type=server.auth_type,
+                        username=server.username,
+                        password=password,
+                        database='master'
+                    )
+                except Exception as e:
+                    logger.warning(f"Connection failed for {server.name}: {e}")
+                    self._update_server_status(session, server, 'offline')
+                    return
+
+                try:
+                    cursor = conn.cursor()
+                    metrics = self._collect_metrics(cursor)
+
+                    # Create snapshot
+                    snapshot = ServerSnapshot(
+                        server_id=server.id,
+                        collected_at=datetime.now(timezone.utc),
+                        cpu_percent=metrics.get('cpu_percent'),
+                        memory_percent=metrics.get('memory_percent'),
+                        connection_count=metrics.get('connection_count'),
+                        batch_requests_sec=metrics.get('batch_requests_sec'),
+                        page_life_expectancy=metrics.get('page_life_expectancy'),
+                        blocked_processes=metrics.get('blocked_processes'),
+                        extended_metrics=metrics.get('extended_metrics'),
+                        status='online'
+                    )
+                    session.add(snapshot)
+
+                    # Update config last_collected_at
+                    config.last_collected_at = datetime.now(timezone.utc)
+
+                    # Collect running queries if enabled
+                    if config.query_collection_enabled:
+                        if self._should_collect_queries(config):
+                            self._collect_running_queries(session, server, config, cursor)
+
+                    conn.close()
+
+                    # Update server status
+                    self._update_server_status(session, server, 'online')
+
+                    session.commit()
+                    logger.debug(f"Collected metrics from {server.name}")
+
+                except Exception as e:
+                    logger.exception(f"Error collecting metrics from {server.name}: {e}")
+                    conn.close()
+                    self._update_server_status(session, server, 'error')
+
+            except Exception as e:
+                logger.exception(f"Error in collect_server for {server.name}: {e}")
+            finally:
+                if session:
+                    try:
+                        session.remove()
+                    except Exception:
+                        pass
 
     def _collect_metrics(self, cursor) -> dict:
         """
@@ -344,6 +359,129 @@ class MetricCollector:
             logger.debug(f"Blocked processes failed: {e}")
 
         return metrics
+
+    def _should_collect_queries(self, config: CollectionConfig) -> bool:
+        """Check if enough time has passed to collect running queries."""
+        if not config.last_query_collected_at:
+            return True
+
+        elapsed = (datetime.now(timezone.utc) - config.last_query_collected_at).total_seconds()
+        return elapsed >= config.query_collection_interval
+
+    def _collect_running_queries(self, session, server: Server, config: CollectionConfig, cursor):
+        """
+        Collect running queries from SQL Server.
+
+        Args:
+            session: Database session
+            server: Server model instance
+            config: Collection config for the server
+            cursor: Database cursor
+        """
+        try:
+            min_duration_ms = config.query_min_duration_ms or 0
+            collected_at = datetime.now(timezone.utc)
+
+            # Build dynamic WHERE clause based on filters
+            where_conditions = [
+                "r.session_id > 50",
+                "r.session_id != @@SPID",
+                "r.sql_handle IS NOT NULL",
+                f"DATEDIFF(MILLISECOND, r.start_time, GETDATE()) >= {min_duration_ms}"
+            ]
+
+            # Add filter conditions (using parameterized-style escaping)
+            if config.query_filter_database:
+                # Escape single quotes in the pattern
+                db_pattern = config.query_filter_database.replace("'", "''")
+                where_conditions.append(f"DB_NAME(r.database_id) LIKE '{db_pattern}'")
+
+            if config.query_filter_login:
+                login_pattern = config.query_filter_login.replace("'", "''")
+                where_conditions.append(f"s.login_name LIKE '{login_pattern}'")
+
+            if config.query_filter_user:
+                user_pattern = config.query_filter_user.replace("'", "''")
+                where_conditions.append(f"s.nt_user_name LIKE '{user_pattern}'")
+
+            if config.query_filter_text_include:
+                include_pattern = config.query_filter_text_include.replace("'", "''")
+                where_conditions.append(f"t.text LIKE '{include_pattern}'")
+
+            if config.query_filter_text_exclude:
+                exclude_pattern = config.query_filter_text_exclude.replace("'", "''")
+                where_conditions.append(f"t.text NOT LIKE '{exclude_pattern}'")
+
+            where_clause = " AND ".join(where_conditions)
+
+            # Determine if we need to join sys.dm_exec_sessions
+            needs_session_join = bool(config.query_filter_login or config.query_filter_user)
+            session_join = "JOIN sys.dm_exec_sessions s ON r.session_id = s.session_id" if needs_session_join else ""
+
+            # Query to fetch running queries with query text
+            cursor.execute(f"""
+                SELECT
+                    r.session_id,
+                    r.request_id,
+                    DB_NAME(r.database_id) AS database_name,
+                    SUBSTRING(t.text,
+                        (r.statement_start_offset/2) + 1,
+                        ((CASE WHEN r.statement_end_offset = -1
+                             THEN LEN(CONVERT(NVARCHAR(MAX), t.text)) * 2
+                             ELSE r.statement_end_offset
+                        END) - r.statement_start_offset) / 2 + 1) AS query_text,
+                    r.start_time,
+                    DATEDIFF(MILLISECOND, r.start_time, GETDATE()) AS duration_ms,
+                    r.status,
+                    r.wait_type,
+                    r.wait_time AS wait_time_ms,
+                    r.cpu_time AS cpu_time_ms,
+                    r.logical_reads,
+                    r.reads AS physical_reads,
+                    r.writes
+                FROM sys.dm_exec_requests r
+                CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t
+                {session_join}
+                WHERE {where_clause}
+                ORDER BY r.start_time
+            """)
+
+            rows = cursor.fetchall()
+            query_count = 0
+
+            for row in rows:
+                try:
+                    snapshot = RunningQuerySnapshot(
+                        server_id=server.id,
+                        collected_at=collected_at,
+                        session_id=row[0],
+                        request_id=row[1],
+                        database_name=row[2],
+                        query_text=row[3],
+                        start_time=row[4],
+                        duration_ms=row[5],
+                        status=row[6],
+                        wait_type=row[7],
+                        wait_time_ms=row[8],
+                        cpu_time_ms=row[9],
+                        logical_reads=row[10],
+                        physical_reads=row[11],
+                        writes=row[12],
+                    )
+                    session.add(snapshot)
+                    query_count += 1
+                except Exception as e:
+                    logger.debug(f"Error processing query row: {e}")
+                    continue
+
+            # Update last_query_collected_at
+            config.last_query_collected_at = collected_at
+
+            if query_count > 0:
+                logger.debug(f"Collected {query_count} running queries from {server.name}")
+
+        except Exception as e:
+            logger.debug(f"Running queries collection failed for {server.name}: {e}")
 
     def _update_server_status(self, session, server: Server, status: str):
         """Update server status and last_checked timestamp."""

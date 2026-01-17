@@ -7,7 +7,7 @@ from typing import Optional
 
 from app import create_app
 from app.models.system import Tenant
-from app.models.tenant import Setting, ServerSnapshot, Metric
+from app.models.tenant import Setting, ServerSnapshot, Metric, RunningQuerySnapshot
 from app.core.tenant_manager import tenant_manager
 from app.services.retention_service import RetentionService
 
@@ -125,10 +125,17 @@ class MetricsCleanup:
                 Metric.collected_at < cutoff
             )
 
-            if snapshots_deleted > 0 or metrics_deleted > 0:
+            # Clean up running query snapshots
+            queries_deleted = self._delete_in_batches(
+                session,
+                RunningQuerySnapshot,
+                RunningQuerySnapshot.collected_at < cutoff
+            )
+
+            if snapshots_deleted > 0 or metrics_deleted > 0 or queries_deleted > 0:
                 logger.info(
                     f"Tenant {tenant.slug}: deleted {snapshots_deleted} snapshots, "
-                    f"{metrics_deleted} metrics"
+                    f"{metrics_deleted} metrics, {queries_deleted} running queries"
                 )
             else:
                 logger.debug(f"Tenant {tenant.slug}: no data to clean up")

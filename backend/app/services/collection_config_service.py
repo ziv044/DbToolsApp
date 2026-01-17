@@ -158,3 +158,95 @@ class CollectionConfigService:
         self.session.add(config)
         self.session.commit()
         return config
+
+    # Query collection methods
+
+    def update_query_config(
+        self,
+        server_id: UUID,
+        query_collection_interval: Optional[int] = None,
+        query_min_duration_ms: Optional[int] = None,
+        query_filter_database: Optional[str] = None,
+        query_filter_login: Optional[str] = None,
+        query_filter_user: Optional[str] = None,
+        query_filter_text_include: Optional[str] = None,
+        query_filter_text_exclude: Optional[str] = None
+    ) -> CollectionConfig:
+        """
+        Update query collection config for a server.
+
+        Args:
+            server_id: Server ID
+            query_collection_interval: Query collection interval (10-300 seconds)
+            query_min_duration_ms: Minimum query duration to capture (0-60000 ms)
+            query_filter_database: Database name filter (SQL LIKE pattern)
+            query_filter_login: Login name filter (SQL LIKE pattern)
+            query_filter_user: Session user filter (SQL LIKE pattern)
+            query_filter_text_include: Query text LIKE pattern to include
+            query_filter_text_exclude: Query text NOT LIKE pattern to exclude
+
+        Returns:
+            Updated CollectionConfig
+        """
+        config = self.get_config(server_id)
+
+        # Validate and update query collection interval
+        if query_collection_interval is not None:
+            if query_collection_interval < CollectionConfig.MIN_QUERY_INTERVAL:
+                raise CollectionConfigValidationError(
+                    f'Query collection interval must be at least {CollectionConfig.MIN_QUERY_INTERVAL} seconds',
+                    'query_collection_interval'
+                )
+            if query_collection_interval > CollectionConfig.MAX_QUERY_INTERVAL:
+                raise CollectionConfigValidationError(
+                    f'Query collection interval must not exceed {CollectionConfig.MAX_QUERY_INTERVAL} seconds',
+                    'query_collection_interval'
+                )
+            config.query_collection_interval = query_collection_interval
+
+        # Validate and update minimum duration
+        if query_min_duration_ms is not None:
+            if query_min_duration_ms < 0:
+                raise CollectionConfigValidationError(
+                    'Minimum query duration cannot be negative',
+                    'query_min_duration_ms'
+                )
+            if query_min_duration_ms > CollectionConfig.MAX_QUERY_MIN_DURATION_MS:
+                raise CollectionConfigValidationError(
+                    f'Minimum query duration must not exceed {CollectionConfig.MAX_QUERY_MIN_DURATION_MS} ms',
+                    'query_min_duration_ms'
+                )
+            config.query_min_duration_ms = query_min_duration_ms
+
+        # Update filter fields (empty string means clear the filter)
+        if query_filter_database is not None:
+            config.query_filter_database = query_filter_database if query_filter_database else None
+
+        if query_filter_login is not None:
+            config.query_filter_login = query_filter_login if query_filter_login else None
+
+        if query_filter_user is not None:
+            config.query_filter_user = query_filter_user if query_filter_user else None
+
+        if query_filter_text_include is not None:
+            config.query_filter_text_include = query_filter_text_include if query_filter_text_include else None
+
+        if query_filter_text_exclude is not None:
+            config.query_filter_text_exclude = query_filter_text_exclude if query_filter_text_exclude else None
+
+        self.session.commit()
+        return config
+
+    def start_query_collection(self, server_id: UUID) -> CollectionConfig:
+        """Enable query collection for a server."""
+        config = self.get_config(server_id)
+        config.query_collection_enabled = True
+        self.session.commit()
+        return config
+
+    def stop_query_collection(self, server_id: UUID) -> CollectionConfig:
+        """Disable query collection for a server."""
+        config = self.get_config(server_id)
+        config.query_collection_enabled = False
+        self.session.commit()
+        return config

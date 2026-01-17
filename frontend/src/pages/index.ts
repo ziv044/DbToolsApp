@@ -1,6 +1,8 @@
 export { Dashboard } from './Dashboard'
 export { Servers } from './Servers'
 export { ServerDetail } from './ServerDetail'
+export { RunningQueries } from './RunningQueries'
+export { QueryCollectionConfig } from './QueryCollectionConfig'
 export { Groups } from './Groups'
 export { GroupDetail } from './GroupDetail'
 export { Policies } from './Policies'
