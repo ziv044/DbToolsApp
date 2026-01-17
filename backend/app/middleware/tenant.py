@@ -39,6 +39,10 @@ class TenantMiddleware:
         # Generate request ID for tracing
         g.request_id = str(uuid.uuid4())[:8]
 
+        # Skip CORS preflight requests - they don't include custom headers
+        if request.method == 'OPTIONS':
+            return None
+
         # Skip for excluded paths
         if self._is_excluded(request.path):
             logger.debug(f"[{g.request_id}] Skipping tenant check for: {request.path}")

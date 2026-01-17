@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Database } from 'lucide-react'
 import { Spinner } from '../ui'
 import { useTenants } from '../../hooks/useTenants'
@@ -6,12 +8,35 @@ import { useTenantStore } from '../../stores/tenantStore'
 export const Header = () => {
   const { data, isLoading, isError, error } = useTenants()
   const { currentTenant, setTenant } = useTenantStore()
+  const queryClient = useQueryClient()
+  const previousTenant = useRef<string | null>(null)
+
+  // Auto-select tenant if none selected and tenants are available
+  useEffect(() => {
+    if (!currentTenant && data?.tenants && data.tenants.length > 0) {
+      const firstTenant = data.tenants[0]
+      setTenant(firstTenant.slug, firstTenant)
+    }
+  }, [currentTenant, data?.tenants, setTenant])
+
+  // Invalidate all queries when tenant changes
+  useEffect(() => {
+    if (currentTenant && previousTenant.current !== currentTenant) {
+      if (previousTenant.current !== null) {
+        // Tenant changed, invalidate all tenant-specific queries
+        queryClient.invalidateQueries()
+      }
+      previousTenant.current = currentTenant
+    }
+  }, [currentTenant, queryClient])
 
   const handleTenantChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const slug = e.target.value
     if (slug) {
       const tenant = data?.tenants.find((t) => t.slug === slug)
       setTenant(slug, tenant)
+      // Invalidate all queries when tenant manually changed
+      queryClient.invalidateQueries()
     }
   }
 

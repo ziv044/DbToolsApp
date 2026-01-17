@@ -6,6 +6,7 @@ import { ServerForm, type ServerFormData } from './ServerForm'
 import { serverService } from '../../services/serverService'
 import { handleApiError } from '../../services/api'
 import { toast } from '../ui/toastStore'
+import { useTenantStore } from '../../stores/tenantStore'
 
 interface AddServerModalProps {
   isOpen: boolean
@@ -16,6 +17,7 @@ export const AddServerModal = ({ isOpen, onClose }: AddServerModalProps) => {
   const [isLoading, setIsLoading] = useState(false)
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const currentTenant = useTenantStore((state) => state.currentTenant)
 
   const handleSubmit = async (data: ServerFormData) => {
     setIsLoading(true)
@@ -34,7 +36,7 @@ export const AddServerModal = ({ isOpen, onClose }: AddServerModalProps) => {
       toast.success(`Server "${data.name}" added successfully`)
 
       // Invalidate servers query to refresh the list
-      await queryClient.invalidateQueries({ queryKey: ['servers'] })
+      await queryClient.invalidateQueries({ queryKey: ['servers', currentTenant] })
 
       onClose()
       navigate('/servers')

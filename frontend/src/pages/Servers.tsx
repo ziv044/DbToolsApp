@@ -1,22 +1,78 @@
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Server, RefreshCw } from 'lucide-react'
 import { Card, CardHeader, CardContent, Button, Spinner } from '../components/ui'
 import { AddServerModal, ServerList } from '../components/servers'
 import { serverService } from '../services/serverService'
+import type { Server as ServerType } from '../services/serverService'
+import { healthService } from '../services/healthService'
 import { toast } from '../components/ui/toastStore'
+import { useTenantStore } from '../stores/tenantStore'
 
 export const Servers = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [isTabVisible, setIsTabVisible] = useState(!document.hidden)
   const queryClient = useQueryClient()
+  const currentTenant = useTenantStore((state) => state.currentTenant)
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ['servers'],
-    queryFn: serverService.getAll,
+  // Handle visibility change - pause polling when tab is hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      const visible = !document.hidden
+      setIsTabVisible(visible)
+      if (visible && currentTenant) {
+        queryClient.invalidateQueries({ queryKey: ['servers', currentTenant] })
+        queryClient.invalidateQueries({ queryKey: ['servers-health', currentTenant] })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [queryClient, currentTenant])
+
+  const { data, isLoading, refetch, isFetching, error } = useQuery({
+    queryKey: ['servers', currentTenant],
+    queryFn: async () => {
+      console.log('[Servers] Fetching for tenant:', currentTenant)
+      const result = await serverService.getAll()
+      console.log('[Servers] Result:', result)
+      return result
+    },
     staleTime: 30_000,
+    enabled: !!currentTenant,
   })
 
-  const servers = data?.servers ?? []
+  // Debug: log state changes
+  console.log('[Servers] Render state:', { currentTenant, isLoading, hasData: !!data, serverCount: data?.servers?.length, error })
+
+  // Also fetch health data for real-time status
+  const { data: healthData } = useQuery({
+    queryKey: ['servers-health', currentTenant],
+    queryFn: healthService.getAllHealth,
+    refetchInterval: isTabVisible ? 30_000 : false,
+    retry: 3,
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+    enabled: !!currentTenant,
+  })
+
+  // Merge server data with health status
+  const servers: ServerType[] = useMemo(() => {
+    const baseServers = data?.servers ?? []
+    if (!healthData?.servers) return baseServers
+
+    const healthMap = new Map(healthData.servers.map((h) => [h.server_id, h]))
+
+    return baseServers.map((server) => {
+      const health = healthMap.get(server.id)
+      if (health) {
+        return {
+          ...server,
+          status: health.status as ServerType['status'],
+        }
+      }
+      return server
+    })
+  }, [data?.servers, healthData?.servers])
 
   const handleBulkAction = async (ids: string[], action: string) => {
     if (action === 'delete') {
@@ -25,7 +81,7 @@ export const Servers = () => {
       try {
         await Promise.all(ids.map((id) => serverService.delete(id)))
         toast.success(`Deleted ${ids.length} server(s)`)
-        await queryClient.invalidateQueries({ queryKey: ['servers'] })
+        await queryClient.invalidateQueries({ queryKey: ['servers', currentTenant] })
       } catch {
         toast.error('Failed to delete servers')
       }
@@ -37,7 +93,14 @@ export const Servers = () => {
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">Servers</h1>
         <div className="flex gap-2">
-          <Button variant="secondary" onClick={() => refetch()} disabled={isFetching}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              refetch()
+              queryClient.invalidateQueries({ queryKey: ['servers-health', currentTenant] })
+            }}
+            disabled={isFetching}
+          >
             <RefreshCw className={`h-4 w-4 mr-2 ${isFetching ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -53,9 +116,30 @@ export const Servers = () => {
           <h2 className="text-lg font-semibold">SQL Server Connections</h2>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
+          {!currentTenant ? (
+            <div className="text-center py-12">
+              <Server className="mx-auto h-12 w-12 text-gray-400" />
+              <h3 className="mt-2 text-sm font-medium text-gray-900">No tenant selected</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Please select a tenant from the dropdown above.
+              </p>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Spinner size="lg" />
+            </div>
+          ) : error ? (
+            <div className="text-center py-12">
+              <Server className="mx-auto h-12 w-12 text-red-400" />
+              <h3 className="mt-2 text-sm font-medium text-red-900">Error loading servers</h3>
+              <p className="mt-1 text-sm text-red-500">
+                {error instanceof Error ? error.message : 'Failed to fetch servers'}
+              </p>
+              <div className="mt-4">
+                <Button variant="secondary" onClick={() => refetch()}>
+                  Try Again
+                </Button>
+              </div>
             </div>
           ) : servers.length === 0 ? (
             <div className="text-center py-12">

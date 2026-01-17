@@ -333,6 +333,433 @@ class CollectionConfig(TenantBase):
         }
 
 
+class Policy(TenantBase):
+    """Reusable policy configuration for SQL Server operations."""
+    __tablename__ = 'policies'
+
+    # Policy types
+    TYPE_BACKUP = 'backup'
+    TYPE_INDEX_MAINTENANCE = 'index_maintenance'
+    TYPE_INTEGRITY_CHECK = 'integrity_check'
+    TYPE_CUSTOM_SCRIPT = 'custom_script'
+    VALID_TYPES = [TYPE_BACKUP, TYPE_INDEX_MAINTENANCE, TYPE_INTEGRITY_CHECK, TYPE_CUSTOM_SCRIPT]
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False, unique=True)
+    type = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    configuration = Column(JSON, nullable=False, default=dict)
+    version = Column(Integer, nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)
+    is_deleted = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    # Relationship to version history
+    versions = relationship('PolicyVersion', back_populates='policy', order_by='desc(PolicyVersion.version)')
+
+    def to_dict(self, include_versions: bool = False) -> dict:
+        """Convert policy to dictionary representation."""
+        result = {
+            'id': str(self.id),
+            'name': self.name,
+            'type': self.type,
+            'description': self.description,
+            'configuration': self.configuration,
+            'version': self.version,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+        if include_versions:
+            result['versions'] = [v.to_dict() for v in self.versions]
+
+        return result
+
+
+class PolicyVersion(TenantBase):
+    """Historical version of a policy configuration (immutable versioning)."""
+    __tablename__ = 'policy_versions'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_id = Column(UUID(as_uuid=True), ForeignKey('policies.id', ondelete='CASCADE'), nullable=False)
+    version = Column(Integer, nullable=False)
+    configuration = Column(JSON, nullable=False)
+    description = Column(Text, nullable=True)  # Description at time of this version
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    # Composite unique constraint on policy_id + version
+    __table_args__ = (
+        Index('ix_policy_versions_policy_version', 'policy_id', 'version', unique=True),
+    )
+
+    # Relationship back to policy
+    policy = relationship('Policy', back_populates='versions')
+
+    def to_dict(self) -> dict:
+        """Convert policy version to dictionary representation."""
+        return {
+            'id': str(self.id),
+            'policy_id': str(self.policy_id),
+            'version': self.version,
+            'configuration': self.configuration,
+            'description': self.description,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Job(TenantBase):
+    """Scheduled job for executing policies or custom scripts."""
+    __tablename__ = 'jobs'
+
+    # Schedule types
+    SCHEDULE_ONCE = 'once'
+    SCHEDULE_INTERVAL = 'interval'
+    SCHEDULE_CRON = 'cron'
+    SCHEDULE_EVENT_TRIGGERED = 'event_triggered'
+    VALID_SCHEDULE_TYPES = [SCHEDULE_ONCE, SCHEDULE_INTERVAL, SCHEDULE_CRON, SCHEDULE_EVENT_TRIGGERED]
+
+    # Job types
+    TYPE_POLICY_EXECUTION = 'policy_execution'
+    TYPE_DATA_COLLECTION = 'data_collection'
+    TYPE_CUSTOM_SCRIPT = 'custom_script'
+    TYPE_ALERT_CHECK = 'alert_check'
+    VALID_JOB_TYPES = [TYPE_POLICY_EXECUTION, TYPE_DATA_COLLECTION, TYPE_CUSTOM_SCRIPT, TYPE_ALERT_CHECK]
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    type = Column(String(50), nullable=False)
+    configuration = Column(JSON, nullable=False, default=dict)
+    schedule_type = Column(String(20), nullable=False)
+    schedule_config = Column(JSON, nullable=False, default=dict)
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    next_run_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_run_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    # Relationship to executions
+    executions = relationship('JobExecution', back_populates='job', order_by='desc(JobExecution.started_at)')
+
+    def to_dict(self, include_executions: bool = False) -> dict:
+        """Convert job to dictionary representation."""
+        result = {
+            'id': str(self.id),
+            'name': self.name,
+            'type': self.type,
+            'configuration': self.configuration,
+            'schedule_type': self.schedule_type,
+            'schedule_config': self.schedule_config,
+            'is_enabled': self.is_enabled,
+            'next_run_at': self.next_run_at.isoformat() if self.next_run_at else None,
+            'last_run_at': self.last_run_at.isoformat() if self.last_run_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+        if include_executions:
+            result['executions'] = [e.to_dict() for e in self.executions[:10]]  # Limit to recent 10
+
+        return result
+
+
+class JobExecution(TenantBase):
+    """Execution record for a scheduled job."""
+    __tablename__ = 'job_executions'
+
+    # Execution statuses
+    STATUS_PENDING = 'pending'
+    STATUS_RUNNING = 'running'
+    STATUS_SUCCESS = 'success'
+    STATUS_FAILED = 'failed'
+    STATUS_CANCELLED = 'cancelled'
+    VALID_STATUSES = [STATUS_PENDING, STATUS_RUNNING, STATUS_SUCCESS, STATUS_FAILED, STATUS_CANCELLED]
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id', ondelete='CASCADE'), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey('servers.id', ondelete='SET NULL'), nullable=True)
+    status = Column(String(20), nullable=False, default=STATUS_PENDING)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    result = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index('ix_job_executions_job_started', 'job_id', 'started_at'),
+        Index('ix_job_executions_status', 'status'),
+    )
+
+    # Relationships
+    job = relationship('Job', back_populates='executions')
+    server = relationship('Server')
+
+    def to_dict(self, include_job: bool = False, include_server: bool = False) -> dict:
+        """Convert execution to dictionary representation."""
+        result = {
+            'id': str(self.id),
+            'job_id': str(self.job_id),
+            'server_id': str(self.server_id) if self.server_id else None,
+            'status': self.status,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+            'result': self.result,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+        if include_job and self.job:
+            result['job'] = {
+                'name': self.job.name,
+                'type': self.job.type,
+            }
+
+        if include_server and self.server:
+            result['server'] = {
+                'name': self.server.name,
+                'hostname': self.server.hostname,
+            }
+
+        return result
+
+    @property
+    def duration_seconds(self) -> float | None:
+        """Calculate execution duration in seconds."""
+        if self.started_at and self.completed_at:
+            return (self.completed_at - self.started_at).total_seconds()
+        return None
+
+
+class PolicyDeployment(TenantBase):
+    """Deployment of a policy to a server group."""
+    __tablename__ = 'policy_deployments'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_id = Column(UUID(as_uuid=True), ForeignKey('policies.id', ondelete='CASCADE'), nullable=False)
+    policy_version = Column(Integer, nullable=False)
+    group_id = Column(UUID(as_uuid=True), ForeignKey('server_groups.id', ondelete='CASCADE'), nullable=False)
+    job_id = Column(UUID(as_uuid=True), ForeignKey('jobs.id', ondelete='SET NULL'), nullable=True)  # Linked scheduler job
+    deployed_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    deployed_by = Column(String(255), nullable=True)  # User who deployed
+
+    # Composite unique constraint - a policy can only be deployed once per group
+    __table_args__ = (
+        Index('ix_policy_deployments_policy_group', 'policy_id', 'group_id', unique=True),
+    )
+
+    # Relationships
+    policy = relationship('Policy', backref='deployments')
+    group = relationship('ServerGroup', backref='policy_deployments')
+    job = relationship('Job', backref='policy_deployments')
+
+    def to_dict(self, include_policy: bool = False, include_group: bool = False) -> dict:
+        """Convert deployment to dictionary representation."""
+        result = {
+            'id': str(self.id),
+            'policy_id': str(self.policy_id),
+            'policy_version': self.policy_version,
+            'group_id': str(self.group_id),
+            'job_id': str(self.job_id) if self.job_id else None,
+            'deployed_at': self.deployed_at.isoformat() if self.deployed_at else None,
+            'deployed_by': self.deployed_by,
+        }
+
+        if include_policy and self.policy:
+            result['policy'] = {
+                'name': self.policy.name,
+                'type': self.policy.type,
+                'is_active': self.policy.is_active,
+            }
+
+        if include_group and self.group:
+            result['group'] = {
+                'name': self.group.name,
+                'color': self.group.color,
+            }
+
+        return result
+
+
+class AlertRule(TenantBase):
+    """Alert rule for monitoring metrics and triggering alerts."""
+    __tablename__ = 'alert_rules'
+
+    # Operators
+    OP_GT = 'gt'  # Greater than
+    OP_GTE = 'gte'  # Greater than or equal
+    OP_LT = 'lt'  # Less than
+    OP_LTE = 'lte'  # Less than or equal
+    OP_EQ = 'eq'  # Equal
+    VALID_OPERATORS = [OP_GT, OP_GTE, OP_LT, OP_LTE, OP_EQ]
+
+    # Severity levels
+    SEVERITY_INFO = 'info'
+    SEVERITY_WARNING = 'warning'
+    SEVERITY_CRITICAL = 'critical'
+    VALID_SEVERITIES = [SEVERITY_INFO, SEVERITY_WARNING, SEVERITY_CRITICAL]
+
+    # Metric types that can be monitored
+    VALID_METRIC_TYPES = [
+        'cpu_percent', 'memory_percent', 'connection_count',
+        'batch_requests_sec', 'page_life_expectancy', 'blocked_processes',
+    ]
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    metric_type = Column(String(50), nullable=False)
+    operator = Column(String(10), nullable=False)  # gt, gte, lt, lte, eq
+    threshold = Column(Numeric(18, 4), nullable=False)
+    severity = Column(String(20), nullable=False)  # info, warning, critical
+    is_enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
+
+    # Relationship to alerts
+    alerts = relationship('Alert', back_populates='rule', cascade='all, delete-orphan')
+
+    def to_dict(self) -> dict:
+        """Convert alert rule to dictionary representation."""
+        return {
+            'id': str(self.id),
+            'name': self.name,
+            'metric_type': self.metric_type,
+            'operator': self.operator,
+            'threshold': float(self.threshold),
+            'severity': self.severity,
+            'is_enabled': self.is_enabled,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def evaluate(self, value: float) -> bool:
+        """Evaluate if the given value triggers this alert rule."""
+        threshold = float(self.threshold)
+        if self.operator == self.OP_GT:
+            return value > threshold
+        elif self.operator == self.OP_GTE:
+            return value >= threshold
+        elif self.operator == self.OP_LT:
+            return value < threshold
+        elif self.operator == self.OP_LTE:
+            return value <= threshold
+        elif self.operator == self.OP_EQ:
+            return value == threshold
+        return False
+
+
+class Alert(TenantBase):
+    """Alert instance triggered by an alert rule."""
+    __tablename__ = 'alerts'
+
+    # Alert statuses
+    STATUS_ACTIVE = 'active'
+    STATUS_ACKNOWLEDGED = 'acknowledged'
+    STATUS_RESOLVED = 'resolved'
+    VALID_STATUSES = [STATUS_ACTIVE, STATUS_ACKNOWLEDGED, STATUS_RESOLVED]
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), ForeignKey('alert_rules.id', ondelete='CASCADE'), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey('servers.id', ondelete='CASCADE'), nullable=False)
+    status = Column(String(20), nullable=False, default=STATUS_ACTIVE)
+    metric_value = Column(Numeric(18, 4), nullable=True)  # Value that triggered the alert
+    triggered_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_by = Column(String(255), nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    notes = Column(Text, nullable=True)
+
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index('ix_alerts_status', 'status'),
+        Index('ix_alerts_rule_server', 'rule_id', 'server_id'),
+        Index('ix_alerts_triggered_at', 'triggered_at'),
+    )
+
+    # Relationships
+    rule = relationship('AlertRule', back_populates='alerts')
+    server = relationship('Server')
+
+    def to_dict(self, include_rule: bool = False, include_server: bool = False) -> dict:
+        """Convert alert to dictionary representation."""
+        result = {
+            'id': str(self.id),
+            'rule_id': str(self.rule_id),
+            'server_id': str(self.server_id),
+            'status': self.status,
+            'metric_value': float(self.metric_value) if self.metric_value else None,
+            'triggered_at': self.triggered_at.isoformat() if self.triggered_at else None,
+            'acknowledged_at': self.acknowledged_at.isoformat() if self.acknowledged_at else None,
+            'acknowledged_by': self.acknowledged_by,
+            'resolved_at': self.resolved_at.isoformat() if self.resolved_at else None,
+            'notes': self.notes,
+        }
+
+        if include_rule and self.rule:
+            result['rule'] = {
+                'name': self.rule.name,
+                'metric_type': self.rule.metric_type,
+                'operator': self.rule.operator,
+                'threshold': float(self.rule.threshold),
+                'severity': self.rule.severity,
+            }
+
+        if include_server and self.server:
+            result['server'] = {
+                'id': str(self.server.id),
+                'name': self.server.name,
+                'hostname': self.server.hostname,
+            }
+
+        return result
+
+
+class ActivityLog(TenantBase):
+    """Activity log for tracking important events and actions."""
+    __tablename__ = 'activity_log'
+
+    # Action types
+    ACTION_ALERT_TRIGGERED = 'alert_triggered'
+    ACTION_ALERT_RESOLVED = 'alert_resolved'
+    ACTION_ALERT_ACKNOWLEDGED = 'alert_acknowledged'
+    ACTION_JOB_EXECUTED = 'job_executed'
+    ACTION_JOB_FAILED = 'job_failed'
+    ACTION_POLICY_DEPLOYED = 'policy_deployed'
+    ACTION_SERVER_ONLINE = 'server_online'
+    ACTION_SERVER_OFFLINE = 'server_offline'
+
+    # Entity types
+    ENTITY_ALERT = 'alert'
+    ENTITY_JOB = 'job'
+    ENTITY_POLICY = 'policy'
+    ENTITY_SERVER = 'server'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action = Column(String(100), nullable=False)
+    entity_type = Column(String(50), nullable=True)
+    entity_id = Column(UUID(as_uuid=True), nullable=True)
+    details = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utc_now)
+
+    # Indexes for efficient querying
+    __table_args__ = (
+        Index('ix_activity_log_created_at', 'created_at'),
+        Index('ix_activity_log_entity', 'entity_type', 'entity_id'),
+    )
+
+    def to_dict(self) -> dict:
+        """Convert activity log to dictionary representation."""
+        return {
+            'id': str(self.id),
+            'action': self.action,
+            'entity_type': self.entity_type,
+            'entity_id': str(self.entity_id) if self.entity_id else None,
+            'details': self.details,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 # Seed data for metric types
 METRIC_TYPES_SEED = [
     ('cpu_percent', '%', 'SQL Server CPU utilization percentage'),

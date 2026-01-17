@@ -14,6 +14,10 @@ import {
   AlertTriangle,
   Rocket,
   RefreshCw,
+  Activity,
+  Bell,
+  PlayCircle,
+  AlertCircle,
 } from 'lucide-react'
 import { Card, CardHeader, CardContent, Button, Spinner, Badge } from '../components/ui'
 import { ConfirmDialog } from '../components/ui/Modal'
@@ -22,7 +26,10 @@ import type { TestConnectionResult } from '../services/serverService'
 import { deploymentService } from '../services/deploymentService'
 import type { DeploymentStatusType } from '../services/deploymentService'
 import { LabelInput } from '../components/servers/LabelInput'
+import { MetricsCharts } from '../components/servers/MetricsCharts'
 import { toast } from '../components/ui/toastStore'
+import { activityService, ACTION_LABELS } from '../services/activityService'
+import type { ActivityLog } from '../services/activityService'
 
 const statusVariants: Record<string, 'success' | 'error' | 'warning' | 'default'> = {
   online: 'success',
@@ -74,6 +81,13 @@ export const ServerDetail = () => {
     queryKey: ['deployment-status', id],
     queryFn: () => deploymentService.getStatus(id!),
     enabled: !!id && !!server,
+  })
+
+  const { data: serverActivity, isLoading: isLoadingActivity } = useQuery({
+    queryKey: ['server-activity', id],
+    queryFn: () => activityService.getEntityActivities('server', id!),
+    enabled: !!id && !!server,
+    refetchInterval: 30000,
   })
 
   const deployMutation = useMutation({
@@ -437,29 +451,103 @@ export const ServerDetail = () => {
           </CardContent>
         </Card>
 
-        {/* Activity (Placeholder) */}
+        {/* Activity */}
         <Card>
           <CardHeader>
-            <h2 className="text-lg font-semibold">Recent Activity</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Recent Activity</h2>
+              <Link to={`/activity?entity_type=server&entity_id=${server.id}`}>
+                <Button variant="ghost" size="sm">
+                  View All
+                </Button>
+              </Link>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-start gap-3">
-                <div className="p-1.5 bg-green-100 rounded-full">
-                  <CheckCircle className="h-3 w-3 text-green-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-gray-900">Server added</p>
-                  <p className="text-xs text-gray-500 flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    {new Date(server.created_at).toLocaleString()}
-                  </p>
+            {isLoadingActivity ? (
+              <div className="flex items-center justify-center py-4">
+                <Spinner size="sm" />
+              </div>
+            ) : serverActivity && serverActivity.activities.length > 0 ? (
+              <div className="space-y-3">
+                {serverActivity.activities.slice(0, 5).map((activity: ActivityLog) => {
+                  const getActivityIcon = (action: string) => {
+                    if (action.includes('alert') || action.includes('triggered')) {
+                      return <Bell className="h-3 w-3 text-yellow-600" />
+                    }
+                    if (action.includes('job') || action.includes('executed')) {
+                      return <PlayCircle className="h-3 w-3 text-blue-600" />
+                    }
+                    if (action.includes('failed') || action.includes('offline')) {
+                      return <AlertCircle className="h-3 w-3 text-red-600" />
+                    }
+                    if (action.includes('resolved') || action.includes('online')) {
+                      return <CheckCircle className="h-3 w-3 text-green-600" />
+                    }
+                    return <Activity className="h-3 w-3 text-gray-600" />
+                  }
+
+                  const getActivityBgColor = (action: string) => {
+                    if (action.includes('alert') || action.includes('triggered')) {
+                      return 'bg-yellow-100'
+                    }
+                    if (action.includes('job') || action.includes('executed')) {
+                      return 'bg-blue-100'
+                    }
+                    if (action.includes('failed') || action.includes('offline')) {
+                      return 'bg-red-100'
+                    }
+                    if (action.includes('resolved') || action.includes('online')) {
+                      return 'bg-green-100'
+                    }
+                    return 'bg-gray-100'
+                  }
+
+                  return (
+                    <div key={activity.id} className="flex items-start gap-3">
+                      <div className={`p-1.5 ${getActivityBgColor(activity.action)} rounded-full`}>
+                        {getActivityIcon(activity.action)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-900">
+                          {ACTION_LABELS[activity.action] || activity.action}
+                        </p>
+                        {activity.details && activity.details.name != null && (
+                          <p className="text-xs text-gray-600 truncate">
+                            {String(activity.details.name)}
+                          </p>
+                        )}
+                        <p className="text-xs text-gray-500 flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {new Date(activity.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="p-1.5 bg-green-100 rounded-full">
+                    <CheckCircle className="h-3 w-3 text-green-600" />
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-900">Server added</p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {new Date(server.created_at).toLocaleString()}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Metrics Charts Section */}
+      <MetricsCharts serverId={server.id} />
 
       {/* Delete Confirmation */}
       <ConfirmDialog

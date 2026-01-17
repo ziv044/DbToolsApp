@@ -16,7 +16,13 @@ def create_app(config_name=None):
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
-    cors.init_app(app)
+    cors.init_app(app, resources={
+        r"/api/*": {
+            "origins": "*",
+            "allow_headers": ["Content-Type", "X-Tenant-Slug"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        }
+    })
 
     # Import models to ensure they're registered with SQLAlchemy
     from app import models  # noqa: F401

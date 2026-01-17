@@ -6,7 +6,9 @@ import { Input } from '../ui/Input'
 import type { Server as ServerType } from '../../services/serverService'
 
 const statusVariants: Record<string, 'success' | 'error' | 'warning' | 'default'> = {
+  healthy: 'success',
   online: 'success',
+  critical: 'error',
   offline: 'error',
   warning: 'warning',
   unknown: 'default',

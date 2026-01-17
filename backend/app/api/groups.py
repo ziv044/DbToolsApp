@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.api import api
 from app.middleware import require_tenant
+from app.models.tenant import PolicyDeployment
 from app.services.group_service import (
     GroupService,
     GroupValidationError,
@@ -258,5 +259,48 @@ def remove_server_from_group(group_id: str, server_id: str):
             'error': {
                 'code': 'SERVER_NOT_FOUND',
                 'message': str(e)
+            }
+        }), 404
+
+
+@api.route('/groups/<group_id>/policies', methods=['GET'])
+@require_tenant
+def get_group_policies(group_id: str):
+    """Get all policies deployed to a group.
+
+    Returns:
+        List of deployed policies with deployment info
+    """
+    try:
+        uuid_id = UUID(group_id)
+    except ValueError:
+        return jsonify({
+            'error': {
+                'code': 'INVALID_ID',
+                'message': 'Invalid group ID format'
+            }
+        }), 400
+
+    try:
+        service = GroupService(g.tenant_session)
+        group = service.get_by_id(uuid_id)
+
+        # Get deployments for this group
+        deployments = g.tenant_session.query(PolicyDeployment).filter(
+            PolicyDeployment.group_id == uuid_id
+        ).order_by(PolicyDeployment.deployed_at.desc()).all()
+
+        return jsonify({
+            'group_id': str(uuid_id),
+            'group_name': group.name,
+            'policies': [d.to_dict(include_policy=True) for d in deployments],
+            'total': len(deployments),
+        })
+
+    except GroupNotFoundError:
+        return jsonify({
+            'error': {
+                'code': 'NOT_FOUND',
+                'message': f'Group with id {group_id} not found'
             }
         }), 404
