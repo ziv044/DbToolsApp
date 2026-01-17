@@ -1,0 +1,25 @@
+# Flask core
+Flask>=3.0.0
+Flask-SQLAlchemy>=3.1.0
+Flask-Migrate>=4.0.0
+Flask-CORS>=4.0.0
+
+# Database
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.9
+alembic>=1.13.0
+
+# SQL Server connectivity
+pyodbc>=5.0.0
+
+# Encryption
+cryptography>=41.0.0
+
+# Scheduling
+APScheduler>=3.10.0
+
+# Production server
+waitress>=3.0.0
+
+# Utilities
+python-dotenv>=1.0.0
