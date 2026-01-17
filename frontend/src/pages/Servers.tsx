@@ -20,14 +20,21 @@ export const Servers = () => {
     const handleVisibilityChange = () => {
       const visible = !document.hidden
       setIsTabVisible(visible)
+<<<<<<< HEAD
       if (visible && currentTenant) {
         queryClient.invalidateQueries({ queryKey: ['servers', currentTenant] })
         queryClient.invalidateQueries({ queryKey: ['servers-health', currentTenant] })
+=======
+      if (visible) {
+        queryClient.invalidateQueries({ queryKey: ['servers'] })
+        queryClient.invalidateQueries({ queryKey: ['servers-health'] })
+>>>>>>> 85076bd4595ec67f3055bb0e27bd18f0c8db67ed
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+<<<<<<< HEAD
   }, [queryClient, currentTenant])
 
   const { data, isLoading, refetch, isFetching, error } = useQuery({
@@ -38,21 +45,37 @@ export const Servers = () => {
       console.log('[Servers] Result:', result)
       return result
     },
+=======
+  }, [queryClient])
+
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ['servers'],
+    queryFn: serverService.getAll,
+>>>>>>> 85076bd4595ec67f3055bb0e27bd18f0c8db67ed
     staleTime: 30_000,
     enabled: !!currentTenant,
   })
 
+<<<<<<< HEAD
   // Debug: log state changes
   console.log('[Servers] Render state:', { currentTenant, isLoading, hasData: !!data, serverCount: data?.servers?.length, error })
 
   // Also fetch health data for real-time status
   const { data: healthData } = useQuery({
     queryKey: ['servers-health', currentTenant],
+=======
+  // Also fetch health data for real-time status
+  const { data: healthData } = useQuery({
+    queryKey: ['servers-health'],
+>>>>>>> 85076bd4595ec67f3055bb0e27bd18f0c8db67ed
     queryFn: healthService.getAllHealth,
     refetchInterval: isTabVisible ? 30_000 : false,
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+<<<<<<< HEAD
     enabled: !!currentTenant,
+=======
+>>>>>>> 85076bd4595ec67f3055bb0e27bd18f0c8db67ed
   })
 
   // Merge server data with health status
@@ -97,7 +120,11 @@ export const Servers = () => {
             variant="secondary"
             onClick={() => {
               refetch()
+<<<<<<< HEAD
               queryClient.invalidateQueries({ queryKey: ['servers-health', currentTenant] })
+=======
+              queryClient.invalidateQueries({ queryKey: ['servers-health'] })
+>>>>>>> 85076bd4595ec67f3055bb0e27bd18f0c8db67ed
             }}
             disabled={isFetching}
           >
