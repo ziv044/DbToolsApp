@@ -370,7 +370,11 @@ class MetricCollector:
 
     def _collect_running_queries(self, session, server: Server, config: CollectionConfig, cursor):
         """
-        Collect running queries from SQL Server.
+        Collect running queries from SQL Server with full session context.
+
+        Always joins sys.dm_exec_sessions to capture login, host, and program
+        information for analytics breakdowns. Also captures blocking_session_id
+        for blocking chain visualization.
 
         Args:
             session: Database session
@@ -414,16 +418,17 @@ class MetricCollector:
 
             where_clause = " AND ".join(where_conditions)
 
-            # Determine if we need to join sys.dm_exec_sessions
-            needs_session_join = bool(config.query_filter_login or config.query_filter_user)
-            session_join = "JOIN sys.dm_exec_sessions s ON r.session_id = s.session_id" if needs_session_join else ""
-
-            # Query to fetch running queries with query text
+            # Query to fetch running queries with full session context
+            # Always join sys.dm_exec_sessions for analytics breakdowns
             cursor.execute(f"""
                 SELECT
                     r.session_id,
                     r.request_id,
+                    r.blocking_session_id,
                     DB_NAME(r.database_id) AS database_name,
+                    s.login_name,
+                    s.host_name,
+                    s.program_name,
                     SUBSTRING(t.text,
                         (r.statement_start_offset/2) + 1,
                         ((CASE WHEN r.statement_end_offset = -1
@@ -441,7 +446,7 @@ class MetricCollector:
                     r.writes
                 FROM sys.dm_exec_requests r
                 CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t
-                {session_join}
+                JOIN sys.dm_exec_sessions s ON r.session_id = s.session_id
                 WHERE {where_clause}
                 ORDER BY r.start_time
             """)
@@ -451,22 +456,29 @@ class MetricCollector:
 
             for row in rows:
                 try:
+                    # blocking_session_id: 0 means not blocked, convert to None for cleaner data
+                    blocking_id = row[2] if row[2] and row[2] > 0 else None
+
                     snapshot = RunningQuerySnapshot(
                         server_id=server.id,
                         collected_at=collected_at,
                         session_id=row[0],
                         request_id=row[1],
-                        database_name=row[2],
-                        query_text=row[3],
-                        start_time=row[4],
-                        duration_ms=row[5],
-                        status=row[6],
-                        wait_type=row[7],
-                        wait_time_ms=row[8],
-                        cpu_time_ms=row[9],
-                        logical_reads=row[10],
-                        physical_reads=row[11],
-                        writes=row[12],
+                        blocking_session_id=blocking_id,
+                        database_name=row[3],
+                        login_name=row[4],
+                        host_name=row[5],
+                        program_name=row[6],
+                        query_text=row[7],
+                        start_time=row[8],
+                        duration_ms=row[9],
+                        status=row[10],
+                        wait_type=row[11],
+                        wait_time_ms=row[12],
+                        cpu_time_ms=row[13],
+                        logical_reads=row[14],
+                        physical_reads=row[15],
+                        writes=row[16],
                     )
                     session.add(snapshot)
                     query_count += 1

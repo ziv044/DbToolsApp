@@ -261,6 +261,11 @@ class RunningQuerySnapshot(TenantBase):
     request_id = Column(Integer, nullable=True)
     database_name = Column(String(128), nullable=True)
 
+    # Session context for analytics breakdowns (from sys.dm_exec_sessions)
+    login_name = Column(String(128), nullable=True)
+    host_name = Column(String(128), nullable=True)
+    program_name = Column(String(128), nullable=True)
+
     # Query text (the main payload)
     query_text = Column(Text, nullable=True)
 
@@ -273,15 +278,21 @@ class RunningQuerySnapshot(TenantBase):
     wait_type = Column(String(60), nullable=True)
     wait_time_ms = Column(Integer, nullable=True)
 
+    # Blocking information (from sys.dm_exec_requests)
+    blocking_session_id = Column(Integer, nullable=True)  # 0 or NULL = not blocked
+
     # Resource usage
     cpu_time_ms = Column(Integer, nullable=True)
     logical_reads = Column(Integer, nullable=True)
     physical_reads = Column(Integer, nullable=True)
     writes = Column(Integer, nullable=True)
 
-    # Composite index for efficient time-range queries
+    # Indexes for efficient queries and aggregations
     __table_args__ = (
         Index('ix_running_queries_server_time', 'server_id', 'collected_at'),
+        Index('ix_running_queries_blocking', 'server_id', 'blocking_session_id'),
+        Index('ix_running_queries_database', 'server_id', 'database_name'),
+        Index('ix_running_queries_login', 'server_id', 'login_name'),
     )
 
     def to_dict(self) -> dict:
@@ -293,12 +304,16 @@ class RunningQuerySnapshot(TenantBase):
             'session_id': self.session_id,
             'request_id': self.request_id,
             'database_name': self.database_name,
+            'login_name': self.login_name,
+            'host_name': self.host_name,
+            'program_name': self.program_name,
             'query_text': self.query_text,
             'start_time': self.start_time.isoformat() if self.start_time else None,
             'duration_ms': self.duration_ms,
             'status': self.status,
             'wait_type': self.wait_type,
             'wait_time_ms': self.wait_time_ms,
+            'blocking_session_id': self.blocking_session_id,
             'cpu_time_ms': self.cpu_time_ms,
             'logical_reads': self.logical_reads,
             'physical_reads': self.physical_reads,

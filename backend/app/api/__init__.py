@@ -11,3 +11,4 @@ from app.api import policies  # noqa: F401, E402
 from app.api import jobs  # noqa: F401, E402
 from app.api import alerts  # noqa: F401, E402
 from app.api import activity  # noqa: F401, E402
+from app.api import analytics  # noqa: F401, E402

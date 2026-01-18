@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { LayoutDashboard, Server, Database, FolderTree, Shield, Clock, Bell, FileText, Settings } from 'lucide-react'
+import { LayoutDashboard, Server, Database, FolderTree, Shield, Clock, Bell, FileText, Settings, BarChart3 } from 'lucide-react'
 import { alertService } from '../../services/alertService'
 import { useTenantStore } from '../../stores/tenantStore'
 
@@ -8,6 +8,7 @@ const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/servers', label: 'Servers', icon: Server },
   { path: '/running-queries', label: 'Running Queries', icon: Database },
+  { path: '/analytics', label: 'Query Analytics', icon: BarChart3 },
   { path: '/groups', label: 'Groups', icon: FolderTree },
   { path: '/policies', label: 'Policies', icon: Shield },
   { path: '/jobs', label: 'Jobs', icon: Clock },
